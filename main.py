@@ -1,24 +1,24 @@
 from google.cloud import error_reporting
 from fake_useragent import UserAgent, FakeUserAgentError
-from bs4 import BeautifulSoup
 from templates import HEADERS, CL_PARAMS
 import argparse
 import requests
 import datetime
 import random
 import time
+import bs4
 import sys
 import re
 
 err_client = error_reporting.Client()
 
 
-def parse_args(arguments: list) -> argparse.Namespace:
+def parse_args(args: list) -> argparse.Namespace:
     """
-    Parse the command line arguments
+    Parse the command line arguments at sys.argv[1:]
 
-    :type arguments: list
-    :param arguments: command line arguments
+    :type args: list
+    :param args: command line arguments
 
     :rtype: argparse.Namespace
     :return: parsed arguments
@@ -29,7 +29,7 @@ def parse_args(arguments: list) -> argparse.Namespace:
     parser.add_argument('--window_length_hours', type=int, required=True)
     parser.add_argument('--cloud_function_endpoint', type=str, required=True)
 
-    return parser.parse_args(arguments)
+    return parser.parse_args(args)
 
 
 def get_random_user_agent() -> str:
@@ -67,20 +67,17 @@ def validate_url(url_to_check: str):
         raise ValueError(f'{url_to_check} is not valid. Please check formatting of location argument.')
 
 
-def get_headers(url, args) -> dict:
+def get_headers(args: argparse.Namespace) -> dict:
     """
     Copy HEADERS template, update values for `User-Agent`, `Host`, `Referer`, return formatted headers
-    :type url: str
-    :param url: The URL which to extract headers `Host` and `Referer` from.
 
-    :type args: Namespace
-    :param args:
+    :type args: argpase.Namespace
+    :param args: arguments parsed from command line
 
     :rtype: dict
     :returns: The updated HEADERS
     """
     headers = HEADERS.copy()
-
     headers.update({
         'Host': f'{args.location}.craigslist.org',
         'Referer': f'https://www.google.com',
@@ -89,13 +86,12 @@ def get_headers(url, args) -> dict:
     return headers
 
 
-def get_html(url: str, args: argparse.Namespace, **kwargs) -> str:
+def get_html(url_to_get: str, args: argparse.Namespace, **kwargs) -> str:
     """
     Make the GET request, return the response text. Report any errors to Google Cloud Error reporting.
 
-    :type url: str
-    :param url: The URL to request
-
+    :type url_to_get: str
+    :param url_to_get: The URL to request
 
     :type args: argparse.Namespace
     :param args: command line arguments
@@ -106,16 +102,16 @@ def get_html(url: str, args: argparse.Namespace, **kwargs) -> str:
     response = None
     response_str = ''
 
-    headers = get_headers(url, args)
+    headers = get_headers(args)
 
     try:
-        response = requests.get(url=url, headers=headers, params=kwargs.get('params', None))
+        response = requests.get(url=url_to_get, headers=headers, params=kwargs.get('params', None))
         response.raise_for_status()
         response_str = response.text
     except requests.exceptions.RequestException as err:
         status_code = response.status_code if response else None
         request_context = error_reporting.HTTPContext(
-            method='GET', url=url, user_agent=headers['User-Agent'],
+            method='GET', url=url_to_get, user_agent=headers['User-Agent'],
             referrer=headers['Referer'], response_status_code=status_code)
         err_client.report(message=str(err), http_context=request_context)
 
@@ -124,10 +120,15 @@ def get_html(url: str, args: argparse.Namespace, **kwargs) -> str:
 
 def parse_custom_datetime(datetime_str: str) -> datetime.datetime:
     """
+    Parse a datetime string in format 'YYYY-mm-dd HH:MM'
 
     :type datetime_str: str
-    :param datetime_str:
-    :return:
+    :param datetime_str: datetime string to parse
+
+    :rtype: datetime.datetime
+    :return dt: parsed datetime object
+
+    :raises: :class:`ValueError` if the datetime cannot be parsed (datetime not in correct format)
     """
     try:
         dt = datetime.datetime.strptime(datetime_str, '%Y-%m-%d %H:%M')
@@ -139,11 +140,19 @@ def parse_custom_datetime(datetime_str: str) -> datetime.datetime:
 
 def datetime_in_window(dt_start: datetime.datetime, dt_end: datetime.datetime, dt_to_check: datetime.datetime) -> bool:
     """
+    Check if a datetime is in range [dt_start, dt_end]
 
+    :type dt_start: datetime.datetime
     :param dt_start: window start datetime
+
+    :type dt_end: datetime.datetime
     :param dt_end: window end datetime
+
+    :type dt_to_check: datetime.datetime
     :param dt_to_check: datetime to check
-    :return:
+
+    :rtype: bool
+    :return: True when in range, otherwise false
     """
     if dt_start <= dt_to_check <= dt_end:
         return True
@@ -151,24 +160,36 @@ def datetime_in_window(dt_start: datetime.datetime, dt_end: datetime.datetime, d
     return False
 
 
-def extract_posts_in_window(posts: list, dt_start, dt_end) -> list:
+def extract_posts_in_window(page_posts: list, dt_start: datetime.datetime, dt_end: datetime.datetime) -> list:
     """
+    Filter posts not in range[dt_start, dt_end]
 
-    :param posts:
-    :param dt_start:
-    :param dt_end:
-    :return:
+    :type page_posts: list
+    :param page_posts: posts extracted from a URL
+
+    :type dt_start: datetime.datetime
+    :param dt_start: window start datetime
+
+    :type dt_end: datetime.datetime
+    :param dt_end: window end datetime
+
+    :rtype: list
+    :return: posts in range[dt_start, dt_end]
     """
     return [post
-            for post in posts
+            for post in page_posts
             if datetime_in_window(dt_start, dt_end, parse_custom_datetime(post.time['datetime']))]
 
 
-def extract_info_from_post(post) -> dict:
+def extract_info_from_post(post: bs4.element.Tag) -> dict:
     """
+    Extract attributes of interest from tags within a single post
 
-    :param post:
-    :return:
+    :type post: bs4.element.Tag
+    :param post: a HTML Tag representing a single post
+
+    :rtype: dict
+    :return: dict containing the data extracted
     """
     result_title_tag = post.find('a', class_='result-title hdrlnk')
     href = result_title_tag.get('href')
@@ -185,12 +206,19 @@ def extract_info_from_post(post) -> dict:
     }
 
 
-def send_post_to_cloud_function(post, cloud_fn_endpoint) -> tuple:
+def send_post_to_cloud_function(post: bs4.element.Tag, cloud_fn_endpoint: str) -> tuple:
     """
+    Perform a POST request to a Google Cloud Function endpoint. Space out the requests by introducing
+    a pause between POSTs
 
-    :param post:
-    :param cloud_fn_endpoint:
-    :return:
+    :type post: bs4.element.Tag
+    :param post: a HTML Tag representing a single post
+
+    :type cloud_fn_endpoint: str
+    :param cloud_fn_endpoint: cloud function endpoint to POST to
+
+    :rtype: tuple
+    :return: (data, status)
     """
     time.sleep(random.randint(5, 20))
     data = extract_info_from_post(post)
@@ -199,15 +227,15 @@ def send_post_to_cloud_function(post, cloud_fn_endpoint) -> tuple:
 
 
 if __name__ == '__main__':
-    args = parse_args(sys.argv[1:])
-    window_datetime_start = parse_custom_datetime(args.window_datetime_start)
-    window_datetime_end = window_datetime_start + datetime.timedelta(hours=args.window_length_hours)
-    url = f'https://{args.location}.craigslist.org/search/apa'
+    arguments = parse_args(sys.argv[1:])
+    window_datetime_start = parse_custom_datetime(arguments.window_datetime_start)
+    window_datetime_end = window_datetime_start + datetime.timedelta(hours=arguments.window_length_hours)
+    url = f'https://{arguments.location}.craigslist.org/search/apa'
     validate_url(url)
-    soup = BeautifulSoup(get_html(url, params=CL_PARAMS, args=args), 'html.parser')
+    soup = bs4.BeautifulSoup(get_html(url, params=CL_PARAMS, args=arguments), 'html.parser')
     posts = soup.find_all('li', class_='result-row')
     posts_in_window = extract_posts_in_window(posts, window_datetime_start, window_datetime_end)
-    map_iterator = map(lambda post: send_post_to_cloud_function(post, args.cloud_function_endpoint), posts_in_window)
+    map_iterator = map(lambda post: send_post_to_cloud_function(post, arguments.cloud_function_endpoint), posts_in_window)
     results = list(map_iterator)
     # TODO: Do something with results such as record (status_code == 201 / status_code != 201) * 100 as success rate
 

@@ -67,7 +67,7 @@ class TestMain(TestCase):
                          '(KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36'
         })
         responses.add(method=responses.GET, url=url_to_get, status=200, body=self.TEST_HTML)
-        self.assertEqual(main.get_html(url=url_to_get,
+        self.assertEqual(main.get_html(url_to_get=url_to_get,
                                        headers=headers,
                                        params=templates.CL_PARAMS,
                                        args=self.TEST_ARGS_NAMESPACE), self.TEST_HTML)
@@ -82,7 +82,7 @@ class TestMain(TestCase):
         mock_err_report.message = 'test error msg'
         url_to_get = 'https://unreachable.craigslist.org/search/apa'
         responses.add(method=responses.GET, url=url_to_get, status=400, body=requests.exceptions.RequestException())
-        self.assertEqual(main.get_html(url=url_to_get, args=self.TEST_ARGS_NAMESPACE), '')
+        self.assertEqual(main.get_html(url_to_get=url_to_get, args=self.TEST_ARGS_NAMESPACE), '')
 
     def test_get_random_user_agent(self):
         """
@@ -189,16 +189,3 @@ class TestMain(TestCase):
         responses.add(method=responses.POST, url=self.TEST_CLOUD_FN_ENDPOINT, status=201, body=json.dumps(""))
         post = self.TEST_SOUP.find('li', class_='result-row')
         self.assertEqual(main.send_post_to_cloud_function(post, self.TEST_CLOUD_FN_ENDPOINT), ('""', 201))
-
-    @mock.patch('main.send_post_to_cloud_function')
-    @mock.patch('main.get_html')
-    def test_main(self, mock_get_html, mock_cloud_fn_response):
-        """
-
-        """
-        mock_get_html.return_value = self.TEST_HTML
-
-        mock_cloud_fn_response.return_value = ({""}, 201)
-
-        with mock.patch.object(sys, 'argv', self.TEST_COMMAND_LINE_ARGS):
-            self.assertListEqual(main.main(), [({}, 201) for k in range(len(posts))])
