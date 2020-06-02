@@ -5,5 +5,9 @@ steps:
   args: [-c, 'pip install -r requirements.txt', '&&', 'python -m unittest discover']
 - name: 'gcr.io/cloud-builders/docker'
   id: BUILD
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/rental_housing_scraper', '.']
+  args: ['build', '-t', 'gcr.io/$PROJECT_ID/$PROJECT_ID-scraper', '.']
   waitFor: ['INSTALL_THEN_RUN_TESTS']
+- name: 'gcr.io/cloud-builders/docker'
+  id: PUSH_TO_GCR
+  args: ['push', 'gcr.io/$PROJECT_ID/$PROJECT_ID-scraper']
+  waitFor: ['BUILD']
